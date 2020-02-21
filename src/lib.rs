@@ -32,6 +32,20 @@ fn identifier(input: &str) -> Result<(&str, String), &str> {
     Ok((&input[matched.len()..], matched))
 }
 
+fn pair<P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Fn(&str) -> Result<(&str, (R1, R2)), &str>
+where
+    P1: Fn(&str) -> Result<(&str, R1), &str>,
+    P2: Fn(&str) -> Result<(&str, R2), &str>,
+{
+    move |input| match parser1(input) {
+        Ok((next_input, result1)) => match parser2(next_input) {
+            Ok((final_input, result2)) => Ok((final_input, (result1, result2))),
+            Err(err) => Err(err),
+        },
+        Err(err) => Err(err),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -117,6 +131,24 @@ mod tests {
         #[test]
         fn invalid_identifier() {
             assert_eq!(identifier("!iamidentifier"), Err("!iamidentifier"),);
+        }
+    }
+
+    #[cfg(test)]
+    mod pair_tests {
+        use crate::identifier;
+        use crate::match_literal;
+        use crate::pair;
+
+        #[test]
+        fn pair_two_parsers() {
+            let tag_opener = pair(match_literal("<"), identifier);
+            assert_eq!(
+                Ok(("/>", ((), "my-first-element".to_string()))),
+                tag_opener("<my-first-element/>")
+            );
+            assert_eq!(Err("oops"), tag_opener("oops"));
+            assert_eq!(Err("!oops"), tag_opener("<!oops"));
         }
     }
 }
