@@ -6,8 +6,8 @@ struct Element {
 }
 
 fn match_literal(expected: &'static str) -> impl Fn(&str) -> Result<(&str, ()), &str> {
-    move |input| match input.get(0..expected.len()) {
-        Some(next) if next == expected => Ok((&input[expected.len()..], ())),
+    move |input| match input.find(expected) {
+        Some(pos) => Ok((&input[pos + expected.len()..], ())),
         _ => Err(input),
     }
 }
@@ -26,22 +26,22 @@ mod tests {
         #[test]
         fn should_return_end_of_sentence() {
             let parse_joe = match_literal("Hello Joe!");
-            assert_eq!(Ok(("", ())), parse_joe("Hello Joe!"));
+            assert_eq!(parse_joe("Hello Joe!"), Ok(("", ())));
         }
 
         #[test]
         fn should_return_position_after_result() {
             let parse_joe = match_literal("Hello Joe!");
             assert_eq!(
+                parse_joe("Hello Joe! Hello Robert !"),
                 Ok((" Hello Robert !", ())),
-                parse_joe("Hello Joe! Hello Robert !")
             );
         }
 
         #[test]
         fn should_return_error_with_input_if_not_found() {
             let parse_joe = match_literal("Hello Joe!");
-            assert_eq!(Err("Hello Mike!"), parse_joe("Hello Mike!"));
+            assert_eq!(parse_joe("Hello Mike!"), Err("Hello Mike!"),);
         }
     }
 }
