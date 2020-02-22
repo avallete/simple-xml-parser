@@ -7,8 +7,63 @@ struct Element {
 
 type ParseResult<'a, Output> = Result<(&'a str, Output), &'a str>;
 
-fn match_literal(expected: &'static str) -> impl Fn(&str) -> ParseResult<()> {
-    move |input| match input.find(expected) {
+trait Parser<'a, Output> {
+    fn parse(&self, input: &'a str) -> ParseResult<'a, Output>;
+}
+
+impl<'a, F, Output> Parser<'a, Output> for F
+where
+    F: Fn(&'a str) -> ParseResult<Output>,
+{
+    fn parse(&self, input: &'a str) -> ParseResult<'a, Output> {
+        self(input)
+    }
+}
+
+fn map<'a, P, F, A, B>(parser: P, map_fn: F) -> impl Parser<'a, B>
+where
+    P: Parser<'a, A>,
+    F: Fn(A) -> B,
+{
+    move |input| {
+        parser
+            .parse(input)
+            .map(|(next_input, result)| (next_input, map_fn(result)))
+    }
+}
+
+fn pair<'a, P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Parser<'a, (R1, R2)>
+where
+    P1: Parser<'a, R1>,
+    P2: Parser<'a, R2>,
+{
+    move |input| {
+        parser1.parse(input).and_then(|(next_input, result1)| {
+            parser2
+                .parse(next_input)
+                .map(|(last_input, result2)| (last_input, (result1, result2)))
+        })
+    }
+}
+
+fn left<'a, P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Parser<'a, R1>
+where
+    P1: Parser<'a, R1>,
+    P2: Parser<'a, R2>,
+{
+    map(pair(parser1, parser2), |(left, _right)| left)
+}
+
+fn right<'a, P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Parser<'a, R2>
+where
+    P1: Parser<'a, R1>,
+    P2: Parser<'a, R2>,
+{
+    map(pair(parser1, parser2), |(_left, right)| right)
+}
+
+fn match_literal<'a>(expected: &'static str) -> impl Parser<'a, ()> {
+    move |input: &'a str| match input.find(expected) {
         Some(pos) => Ok((&input[pos + expected.len()..], ())),
         _ => Err(input),
     }
@@ -34,42 +89,24 @@ fn identifier(input: &str) -> ParseResult<String> {
     Ok((&input[matched.len()..], matched))
 }
 
-fn pair<P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Fn(&str) -> ParseResult<(R1, R2)>
-where
-    P1: Fn(&str) -> ParseResult<R1>,
-    P2: Fn(&str) -> ParseResult<R2>,
-{
-    move |input| match parser1(input) {
-        Ok((next_input, result1)) => match parser2(next_input) {
-            Ok((final_input, result2)) => Ok((final_input, (result1, result2))),
-            Err(err) => Err(err),
-        },
-        Err(err) => Err(err),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-
     #[cfg(test)]
     mod match_literal_tests {
         use crate::match_literal;
+        use crate::Parser;
 
         #[test]
         fn should_return_end_of_sentence() {
             let parse_joe = match_literal("Hello Joe!");
-            assert_eq!(parse_joe("Hello Joe!"), Ok(("", ())));
+            assert_eq!(parse_joe.parse("Hello Joe!"), Ok(("", ())));
         }
 
         #[test]
         fn should_return_position_after_result() {
             let parse_joe = match_literal("Hello Joe!");
             assert_eq!(
-                parse_joe("Hello Joe! Hello Robert !"),
+                parse_joe.parse("Hello Joe! Hello Robert !"),
                 Ok((" Hello Robert !", ())),
             );
         }
@@ -77,7 +114,7 @@ mod tests {
         #[test]
         fn should_return_error_with_input_if_not_found() {
             let parse_joe = match_literal("Hello Joe!");
-            assert_eq!(parse_joe("Hello Mike!"), Err("Hello Mike!"),);
+            assert_eq!(parse_joe.parse("Hello Mike!"), Err("Hello Mike!"),);
         }
     }
 
@@ -141,16 +178,45 @@ mod tests {
         use crate::identifier;
         use crate::match_literal;
         use crate::pair;
+        use crate::Parser;
 
         #[test]
         fn pair_two_parsers() {
             let tag_opener = pair(match_literal("<"), identifier);
             assert_eq!(
                 Ok(("/>", ((), "my-first-element".to_string()))),
-                tag_opener("<my-first-element/>")
+                tag_opener.parse("<my-first-element/>")
             );
-            assert_eq!(Err("oops"), tag_opener("oops"));
-            assert_eq!(Err("!oops"), tag_opener("<!oops"));
+            assert_eq!(Err("oops"), tag_opener.parse("oops"));
+            assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
+        }
+    }
+
+    #[cfg(test)]
+    mod right_left_tests {
+        use crate::identifier;
+        use crate::left;
+        use crate::match_literal;
+        use crate::right;
+        use crate::Parser;
+
+        #[test]
+        fn right_combinator() {
+            let tag_opener = right(match_literal("<"), identifier);
+            assert_eq!(
+                Ok(("/>", "my-first-element".to_string())),
+                tag_opener.parse("<my-first-element/>")
+            );
+            assert_eq!(Err("oops"), tag_opener.parse("oops"));
+            assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
+        }
+
+        #[test]
+        fn left_combinator() {
+            let tag_opener = left(match_literal("<"), identifier);
+            assert_eq!(Ok(("/>", ())), tag_opener.parse("<my-first-element/>"));
+            assert_eq!(Err("oops"), tag_opener.parse("oops"));
+            assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
         }
     }
 }
