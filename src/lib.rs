@@ -5,14 +5,16 @@ struct Element {
     children: Vec<Element>,
 }
 
-fn match_literal(expected: &'static str) -> impl Fn(&str) -> Result<(&str, ()), &str> {
+type ParseResult<'a, Output> = Result<(&'a str, Output), &'a str>;
+
+fn match_literal(expected: &'static str) -> impl Fn(&str) -> ParseResult<()> {
     move |input| match input.find(expected) {
         Some(pos) => Ok((&input[pos + expected.len()..], ())),
         _ => Err(input),
     }
 }
 
-fn identifier(input: &str) -> Result<(&str, String), &str> {
+fn identifier(input: &str) -> ParseResult<String> {
     let mut matched = String::new();
     let mut chars = input.chars();
 
@@ -32,10 +34,10 @@ fn identifier(input: &str) -> Result<(&str, String), &str> {
     Ok((&input[matched.len()..], matched))
 }
 
-fn pair<P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Fn(&str) -> Result<(&str, (R1, R2)), &str>
+fn pair<P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Fn(&str) -> ParseResult<(R1, R2)>
 where
-    P1: Fn(&str) -> Result<(&str, R1), &str>,
-    P2: Fn(&str) -> Result<(&str, R2), &str>,
+    P1: Fn(&str) -> ParseResult<R1>,
+    P2: Fn(&str) -> ParseResult<R2>,
 {
     move |input| match parser1(input) {
         Ok((next_input, result1)) => match parser2(next_input) {
