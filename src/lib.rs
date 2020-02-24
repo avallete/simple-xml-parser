@@ -1,3 +1,5 @@
+use std::ops::{Bound, Range, RangeBounds, RangeInclusive};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Element {
     name: String,
@@ -62,10 +64,55 @@ where
     map(pair(parser1, parser2), |(_left, right)| right)
 }
 
+fn match_range<'a, P, A>(parser: P, range: impl RangeBounds<usize>) -> impl Parser<'a, Vec<A>>
+where
+    P: Parser<'a, A>,
+{
+    move |mut input: &'a str| {
+        let mut result = Vec::new();
+        let min_occurs = match range.start_bound() {
+            Bound::Unbounded => 0_usize,
+            Bound::Included(i) => *i,
+            Bound::Excluded(i) => *i + 1,
+        };
+        let max_occurs = match range.end_bound() {
+            Bound::Unbounded => input.len(),
+            Bound::Included(i) => *i,
+            Bound::Excluded(i) => *i - 1,
+        };
+        while let Ok((next_input, item)) = parser.parse(input) {
+            input = next_input;
+            result.push(item);
+            if result.len() == max_occurs {
+                break;
+            }
+        }
+        if (min_occurs <= result.len()) && (result.len() <= max_occurs) {
+            Ok((input, result))
+        } else {
+            Err(input)
+        }
+    }
+}
+
+fn one_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<A>>
+where
+    P: Parser<'a, A>,
+{
+    match_range(parser, 1..)
+}
+
+fn zero_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<A>>
+where
+    P: Parser<'a, A>,
+{
+    match_range(parser, 0..)
+}
+
 fn match_literal<'a>(expected: &'static str) -> impl Parser<'a, ()> {
-    move |input: &'a str| match input.find(expected) {
-        Some(pos) => Ok((&input[pos + expected.len()..], ())),
-        _ => Err(input),
+    move |input: &'a str| match input.starts_with(expected) {
+        true => Ok((&input[expected.len()..], ())),
+        false => Err(input),
     }
 }
 
@@ -114,7 +161,12 @@ mod tests {
         #[test]
         fn should_return_error_with_input_if_not_found() {
             let parse_joe = match_literal("Hello Joe!");
+            let parse_he = match_literal("He");
             assert_eq!(parse_joe.parse("Hello Mike!"), Err("Hello Mike!"),);
+            assert_eq!(
+                parse_he.parse("Should not He work"),
+                Err("Should not He work"),
+            );
         }
     }
 
@@ -217,6 +269,30 @@ mod tests {
             assert_eq!(Ok(("/>", ())), tag_opener.parse("<my-first-element/>"));
             assert_eq!(Err("oops"), tag_opener.parse("oops"));
             assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
+        }
+    }
+
+    #[cfg(test)]
+    mod repetition_combinator_tests {
+        use crate::match_literal;
+        use crate::one_or_more;
+        use crate::zero_or_more;
+        use crate::Parser;
+
+        #[test]
+        fn one_or_more_combinator() {
+            let parser = one_or_more(match_literal("ha"));
+            assert_eq!(parser.parse("hahaha"), Ok(("", vec![(), (), ()])));
+            assert_eq!(parser.parse("ahaha"), Err("ahaha"));
+            assert_eq!(parser.parse(""), Err(""));
+        }
+
+        #[test]
+        fn zero_or_more_combinator() {
+            let parser = zero_or_more(match_literal("ha"));
+            assert_eq!(parser.parse("hahaha"), Ok(("", vec![(), (), ()])));
+            assert_eq!(parser.parse("ahah"), Ok(("ahah", vec![])));
+            assert_eq!(parser.parse(""), Ok(("", vec![])));
         }
     }
 }
