@@ -230,20 +230,28 @@ fn attributes<'a>() -> impl Parser<'a, Vec<(String, String)>> {
     zero_or_more(right(space1(), attribute_pair()))
 }
 
-// fn element_start<'a>() -> impl Parser<'a, (String, Vec<(String, String)>)> {
-//     right(match_literal("<"), pair(identifier, attributes()))
-// }
-//
-// fn single_element<'a>() -> impl Parser<'a, Element> {
-//     map(
-//         left(element_start(), match_literal("/>")),
-//         |(name, attributes)| Element {
-//             name,
-//             attributes,
-//             children: vec![],
-//         },
-//     )
-// }
+fn element_start<'a>() -> impl Parser<'a, (String, Vec<(String, String)>)> {
+    right(match_literal("<"), pair(identifier, attributes()))
+}
+
+fn single_element<'a>() -> impl Parser<'a, Element> {
+    map(
+        left(element_start(), match_literal("/>")),
+        |(name, attributes)| Element {
+            name,
+            attributes,
+            children: vec![],
+        },
+    )
+}
+
+fn open_element<'a>() -> impl Parser<'a, Element> {
+    left(element_start(), match_literal(">")).map(|(name, attributes)| Element {
+        name,
+        attributes,
+        children: vec![],
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -386,32 +394,32 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn attribute_parser() {
-    //     assert_eq!(
-    //         Ok((
-    //             "",
-    //             vec![
-    //                 ("one".to_string(), "1".to_string()),
-    //                 ("two".to_string(), "2".to_string())
-    //             ]
-    //         )),
-    //         attributes().parse(" one=\"1\" two=\"2\"")
-    //     );
-    // }
-    //
-    // #[test]
-    // fn single_element_parser() {
-    //     assert_eq!(
-    //         Ok((
-    //             "",
-    //             Element {
-    //                 name: "div".to_string(),
-    //                 attributes: vec![("class".to_string(), "float".to_string())],
-    //                 children: vec![]
-    //             }
-    //         )),
-    //         single_element().parse("<div class=\"float\"/>")
-    //     );
-    // }
+    #[test]
+    fn attribute_parser() {
+        assert_eq!(
+            Ok((
+                "",
+                vec![
+                    ("one".to_string(), "1".to_string()),
+                    ("two".to_string(), "2".to_string())
+                ]
+            )),
+            attributes().parse(" one=\"1\" two=\"2\"")
+        );
+    }
+
+    #[test]
+    fn single_element_parser() {
+        assert_eq!(
+            Ok((
+                "",
+                Element {
+                    name: "div".to_string(),
+                    attributes: vec![("class".to_string(), "float".to_string())],
+                    children: vec![]
+                }
+            )),
+            single_element().parse("<div class=\"float\"/>")
+        );
+    }
 }
