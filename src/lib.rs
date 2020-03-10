@@ -1,3 +1,4 @@
+#![type_length_limit = "1179457"]
 use std::ops::{Bound, Range, RangeBounds, RangeInclusive};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,6 +12,16 @@ type ParseResult<'a, Output> = Result<(&'a str, Output), &'a str>;
 
 trait Parser<'a, Output> {
     fn parse(&self, input: &'a str) -> ParseResult<'a, Output>;
+
+    fn map<F, NewOutput>(self, map_fn: F) -> BoxedParser<'a, NewOutput>
+    where
+        Self: Sized + 'a,
+        Output: 'a,
+        NewOutput: 'a,
+        F: Fn(Output) -> NewOutput + 'a,
+    {
+        BoxedParser::new(map(self, map_fn))
+    }
 }
 
 impl<'a, F, Output> Parser<'a, Output> for F
@@ -19,6 +30,27 @@ where
 {
     fn parse(&self, input: &'a str) -> ParseResult<'a, Output> {
         self(input)
+    }
+}
+
+struct BoxedParser<'a, Output> {
+    parser: Box<dyn Parser<'a, Output> + 'a>,
+}
+
+impl<'a, Output> BoxedParser<'a, Output> {
+    fn new<P>(parser: P) -> Self
+    where
+        P: Parser<'a, Output> + 'a,
+    {
+        BoxedParser {
+            parser: Box::new(parser),
+        }
+    }
+}
+
+impl<'a, Output> Parser<'a, Output> for BoxedParser<'a, Output> {
+    fn parse(&self, input: &'a str) -> ParseResult<'a, Output> {
+        self.parser.parse(input)
     }
 }
 
@@ -136,163 +168,241 @@ fn identifier(input: &str) -> ParseResult<String> {
     Ok((&input[matched.len()..], matched))
 }
 
+fn any_char(input: &str) -> ParseResult<char> {
+    match input.chars().next() {
+        Some(next) => Ok((&input[next.len_utf8()..], next)),
+        _ => Err(input),
+    }
+}
+
+fn pred<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A>
+where
+    P: Parser<'a, A>,
+    F: Fn(&A) -> bool,
+{
+    move |input| {
+        if let Ok((next_input, value)) = parser.parse(input) {
+            if predicate(&value) {
+                return Ok((next_input, value));
+            }
+        }
+        Err(input)
+    }
+}
+
+fn whitespace_char<'a>() -> impl Parser<'a, char> {
+    pred(any_char, |c| c.is_whitespace())
+}
+
+fn space1<'a>() -> impl Parser<'a, Vec<char>> {
+    one_or_more(whitespace_char())
+}
+
+fn space0<'a>() -> impl Parser<'a, Vec<char>> {
+    zero_or_more(whitespace_char())
+}
+
+fn quoted_string<'a>() -> impl Parser<'a, String> {
+    right(
+        match_literal("\""),
+        left(
+            zero_or_more(pred(any_char, |c| *c != '"')),
+            match_literal("\""),
+        ),
+    )
+    .map(|chars| chars.into_iter().collect())
+}
+
+fn attribute_pair<'a>() -> impl Parser<'a, (String, String)> {
+    pair(identifier, right(match_literal("="), quoted_string()))
+}
+
+fn attributes<'a>() -> impl Parser<'a, Vec<(String, String)>> {
+    zero_or_more(right(space1(), attribute_pair()))
+}
+
+// fn element_start<'a>() -> impl Parser<'a, (String, Vec<(String, String)>)> {
+//     right(match_literal("<"), pair(identifier, attributes()))
+// }
+//
+// fn single_element<'a>() -> impl Parser<'a, Element> {
+//     map(
+//         left(element_start(), match_literal("/>")),
+//         |(name, attributes)| Element {
+//             name,
+//             attributes,
+//             children: vec![],
+//         },
+//     )
+// }
+
 #[cfg(test)]
 mod tests {
-    #[cfg(test)]
-    mod match_literal_tests {
-        use crate::match_literal;
-        use crate::Parser;
+    use super::*;
 
-        #[test]
-        fn should_return_end_of_sentence() {
-            let parse_joe = match_literal("Hello Joe!");
-            assert_eq!(parse_joe.parse("Hello Joe!"), Ok(("", ())));
-        }
-
-        #[test]
-        fn should_return_position_after_result() {
-            let parse_joe = match_literal("Hello Joe!");
-            assert_eq!(
-                parse_joe.parse("Hello Joe! Hello Robert !"),
-                Ok((" Hello Robert !", ())),
-            );
-        }
-
-        #[test]
-        fn should_return_error_with_input_if_not_found() {
-            let parse_joe = match_literal("Hello Joe!");
-            let parse_he = match_literal("He");
-            assert_eq!(parse_joe.parse("Hello Mike!"), Err("Hello Mike!"),);
-            assert_eq!(
-                parse_he.parse("Should not He work"),
-                Err("Should not He work"),
-            );
-        }
+    #[test]
+    fn should_return_end_of_sentence() {
+        let parse_joe = match_literal("Hello Joe!");
+        assert_eq!(parse_joe.parse("Hello Joe!"), Ok(("", ())));
     }
 
-    #[cfg(test)]
-    mod identifier_tests {
-        use crate::identifier;
-
-        #[test]
-        fn alphabetic_identifier() {
-            assert_eq!(
-                identifier("iamanidentifier"),
-                Ok(("", "iamanidentifier".to_string())),
-            );
-        }
-
-        #[test]
-        fn alphanumeric_identifier() {
-            assert_eq!(
-                identifier("i4m4nidentifier"),
-                Ok(("", "i4m4nidentifier".to_string())),
-            );
-        }
-
-        #[test]
-        fn identifier_with_dash() {
-            assert_eq!(
-                identifier("i-am-an-identifier"),
-                Ok(("", "i-am-an-identifier".to_string())),
-            );
-        }
-
-        #[test]
-        fn identifier_in_sentence() {
-            assert_eq!(
-                identifier("iam an identifier"),
-                Ok((" an identifier", "iam".to_string())),
-            );
-        }
-
-        #[test]
-        fn one_char_identifier() {
-            assert_eq!(
-                identifier("i am identifier"),
-                Ok((" am identifier", "i".to_string())),
-            );
-        }
-
-        #[test]
-        fn invalid_identifier_starting_with_digit() {
-            assert_eq!(identifier("1am an identifier"), Err("1am an identifier"),);
-        }
-
-        #[test]
-        fn invalid_identifier() {
-            assert_eq!(identifier("!iamidentifier"), Err("!iamidentifier"),);
-        }
+    #[test]
+    fn should_return_position_after_result() {
+        let parse_joe = match_literal("Hello Joe!");
+        assert_eq!(
+            parse_joe.parse("Hello Joe! Hello Robert !"),
+            Ok((" Hello Robert !", ())),
+        );
     }
 
-    #[cfg(test)]
-    mod pair_tests {
-        use crate::identifier;
-        use crate::match_literal;
-        use crate::pair;
-        use crate::Parser;
-
-        #[test]
-        fn pair_two_parsers() {
-            let tag_opener = pair(match_literal("<"), identifier);
-            assert_eq!(
-                Ok(("/>", ((), "my-first-element".to_string()))),
-                tag_opener.parse("<my-first-element/>")
-            );
-            assert_eq!(Err("oops"), tag_opener.parse("oops"));
-            assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
-        }
+    #[test]
+    fn should_return_error_with_input_if_not_found() {
+        let parse_joe = match_literal("Hello Joe!");
+        let parse_he = match_literal("He");
+        assert_eq!(parse_joe.parse("Hello Mike!"), Err("Hello Mike!"),);
+        assert_eq!(
+            parse_he.parse("Should not He work"),
+            Err("Should not He work"),
+        );
     }
 
-    #[cfg(test)]
-    mod right_left_tests {
-        use crate::identifier;
-        use crate::left;
-        use crate::match_literal;
-        use crate::right;
-        use crate::Parser;
-
-        #[test]
-        fn right_combinator() {
-            let tag_opener = right(match_literal("<"), identifier);
-            assert_eq!(
-                Ok(("/>", "my-first-element".to_string())),
-                tag_opener.parse("<my-first-element/>")
-            );
-            assert_eq!(Err("oops"), tag_opener.parse("oops"));
-            assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
-        }
-
-        #[test]
-        fn left_combinator() {
-            let tag_opener = left(match_literal("<"), identifier);
-            assert_eq!(Ok(("/>", ())), tag_opener.parse("<my-first-element/>"));
-            assert_eq!(Err("oops"), tag_opener.parse("oops"));
-            assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
-        }
+    #[test]
+    fn alphabetic_identifier() {
+        assert_eq!(
+            identifier("iamanidentifier"),
+            Ok(("", "iamanidentifier".to_string())),
+        );
     }
 
-    #[cfg(test)]
-    mod repetition_combinator_tests {
-        use crate::match_literal;
-        use crate::one_or_more;
-        use crate::zero_or_more;
-        use crate::Parser;
-
-        #[test]
-        fn one_or_more_combinator() {
-            let parser = one_or_more(match_literal("ha"));
-            assert_eq!(parser.parse("hahaha"), Ok(("", vec![(), (), ()])));
-            assert_eq!(parser.parse("ahaha"), Err("ahaha"));
-            assert_eq!(parser.parse(""), Err(""));
-        }
-
-        #[test]
-        fn zero_or_more_combinator() {
-            let parser = zero_or_more(match_literal("ha"));
-            assert_eq!(parser.parse("hahaha"), Ok(("", vec![(), (), ()])));
-            assert_eq!(parser.parse("ahah"), Ok(("ahah", vec![])));
-            assert_eq!(parser.parse(""), Ok(("", vec![])));
-        }
+    #[test]
+    fn alphanumeric_identifier() {
+        assert_eq!(
+            identifier("i4m4nidentifier"),
+            Ok(("", "i4m4nidentifier".to_string())),
+        );
     }
+
+    #[test]
+    fn identifier_with_dash() {
+        assert_eq!(
+            identifier("i-am-an-identifier"),
+            Ok(("", "i-am-an-identifier".to_string())),
+        );
+    }
+
+    #[test]
+    fn identifier_in_sentence() {
+        assert_eq!(
+            identifier("iam an identifier"),
+            Ok((" an identifier", "iam".to_string())),
+        );
+    }
+
+    #[test]
+    fn one_char_identifier() {
+        assert_eq!(
+            identifier("i am identifier"),
+            Ok((" am identifier", "i".to_string())),
+        );
+    }
+
+    #[test]
+    fn invalid_identifier_starting_with_digit() {
+        assert_eq!(identifier("1am an identifier"), Err("1am an identifier"),);
+    }
+
+    #[test]
+    fn invalid_identifier() {
+        assert_eq!(identifier("!iamidentifier"), Err("!iamidentifier"),);
+    }
+
+    #[test]
+    fn pair_two_parsers() {
+        let tag_opener = pair(match_literal("<"), identifier);
+        assert_eq!(
+            Ok(("/>", ((), "my-first-element".to_string()))),
+            tag_opener.parse("<my-first-element/>")
+        );
+        assert_eq!(Err("oops"), tag_opener.parse("oops"));
+        assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
+    }
+
+    #[test]
+    fn right_combinator() {
+        let tag_opener = right(match_literal("<"), identifier);
+        assert_eq!(
+            Ok(("/>", "my-first-element".to_string())),
+            tag_opener.parse("<my-first-element/>")
+        );
+        assert_eq!(Err("oops"), tag_opener.parse("oops"));
+        assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
+    }
+
+    #[test]
+    fn left_combinator() {
+        let tag_opener = left(match_literal("<"), identifier);
+        assert_eq!(Ok(("/>", ())), tag_opener.parse("<my-first-element/>"));
+        assert_eq!(Err("oops"), tag_opener.parse("oops"));
+        assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
+    }
+
+    #[test]
+    fn one_or_more_combinator() {
+        let parser = one_or_more(match_literal("ha"));
+        assert_eq!(parser.parse("hahaha"), Ok(("", vec![(), (), ()])));
+        assert_eq!(parser.parse("ahaha"), Err("ahaha"));
+        assert_eq!(parser.parse(""), Err(""));
+    }
+
+    #[test]
+    fn zero_or_more_combinator() {
+        let parser = zero_or_more(match_literal("ha"));
+        assert_eq!(parser.parse("hahaha"), Ok(("", vec![(), (), ()])));
+        assert_eq!(parser.parse("ahah"), Ok(("ahah", vec![])));
+        assert_eq!(parser.parse(""), Ok(("", vec![])));
+    }
+
+    #[test]
+    fn predicate_combinator() {
+        let parser = pred(any_char, |c| *c == 'o');
+        assert_eq!(Ok(("mg", 'o')), parser.parse("omg"));
+        assert_eq!(Err("lol"), parser.parse("lol"));
+    }
+
+    #[test]
+    fn quoted_string_parser() {
+        assert_eq!(
+            Ok(("", "Hello Joe!".to_string())),
+            quoted_string().parse("\"Hello Joe!\"")
+        );
+    }
+
+    // #[test]
+    // fn attribute_parser() {
+    //     assert_eq!(
+    //         Ok((
+    //             "",
+    //             vec![
+    //                 ("one".to_string(), "1".to_string()),
+    //                 ("two".to_string(), "2".to_string())
+    //             ]
+    //         )),
+    //         attributes().parse(" one=\"1\" two=\"2\"")
+    //     );
+    // }
+    //
+    // #[test]
+    // fn single_element_parser() {
+    //     assert_eq!(
+    //         Ok((
+    //             "",
+    //             Element {
+    //                 name: "div".to_string(),
+    //                 attributes: vec![("class".to_string(), "float".to_string())],
+    //                 children: vec![]
+    //             }
+    //         )),
+    //         single_element().parse("<div class=\"float\"/>")
+    //     );
+    // }
 }
