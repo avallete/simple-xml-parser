@@ -1,5 +1,5 @@
-#![type_length_limit = "1179457"]
-use std::ops::{Bound, Range, RangeBounds, RangeInclusive};
+#![type_length_limit = "1393011861"]
+use std::ops::{Bound, RangeBounds};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Element {
@@ -276,7 +276,7 @@ where
 }
 
 fn element<'a>() -> impl Parser<'a, Element> {
-    either(single_element(), open_element())
+    whitespace_wrap(either(single_element(), parent_element()))
 }
 
 fn close_element<'a>(expected_name: String) -> impl Parser<'a, String> {
@@ -304,6 +304,13 @@ fn parent_element<'a>() -> impl Parser<'a, Element> {
             el
         })
     })
+}
+
+fn whitespace_wrap<'a, P, A>(parser: P) -> impl Parser<'a, A>
+where
+    P: Parser<'a, A>,
+{
+    right(space0(), left(parser, space0()))
 }
 
 #[cfg(test)]
@@ -474,5 +481,46 @@ mod tests {
             )),
             single_element().parse("<div class=\"float\"/>")
         );
+    }
+
+    #[test]
+    fn xml_parser() {
+        let doc = r#"
+        <top label="Top">
+            <semi-bottom label="Bottom"/>
+            <middle>
+                <bottom label="Another bottom"/>
+            </middle>
+        </top>"#;
+        let parsed_doc = Element {
+            name: "top".to_string(),
+            attributes: vec![("label".to_string(), "Top".to_string())],
+            children: vec![
+                Element {
+                    name: "semi-bottom".to_string(),
+                    attributes: vec![("label".to_string(), "Bottom".to_string())],
+                    children: vec![],
+                },
+                Element {
+                    name: "middle".to_string(),
+                    attributes: vec![],
+                    children: vec![Element {
+                        name: "bottom".to_string(),
+                        attributes: vec![("label".to_string(), "Another bottom".to_string())],
+                        children: vec![],
+                    }],
+                },
+            ],
+        };
+        assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
+    }
+
+    #[test]
+    fn mismatched_closing_tag() {
+        let doc = r#"
+        <top>
+            <bottom/>
+        </middle>"#;
+        assert_eq!(Err("</middle>"), element().parse(doc));
     }
 }
