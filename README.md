@@ -1,6 +1,7 @@
 # Rparser
 
-A simple little minimalistic XML parser in Rust based on [this](https://bodil.lol/parser-combinators/) tutorial.
+A simple little minimalistic XML parser in Rust.
 
-Goal of this project is to get use to Rust, and create my own minimal parsing library.
+It's just a little project to get use to Rust syntax and concepts.
 
+DO NOT USE IT IN PRODUCTION.
